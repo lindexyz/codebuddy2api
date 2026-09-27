@@ -29,6 +29,7 @@ from tkinter import filedialog, messagebox, ttk
 import httpx
 import socket
 import uvicorn
+from datetime import datetime, timedelta, timezone
 
 # ---------------------------------------------------------------------------
 # 仓库定位：源码模式从仓库根导入 core；打包模式 PyInstaller 已内置
@@ -158,6 +159,49 @@ def client_host(bind_host: str) -> str:
     return "127.0.0.1" if bind_host in ("0.0.0.0", "::") else bind_host
 
 
+# ---------------------------------------------------------------------------
+# 剩余额度查询（复用 admin/pool.py 的积分汇总逻辑，仅支持国内账号）
+# ---------------------------------------------------------------------------
+
+BILLING = "https://www.codebuddy.cn/v2/billing/meter/"
+
+
+def query_credits(headers: dict) -> dict:
+    """查询当前账号当前周期的剩余积分（分页汇总所有未过期积分包）。"""
+    from admin.pool import summarize_packages
+
+    now = datetime.now(timezone(timedelta(hours=8)))
+    packages: list = []
+    with httpx.Client(timeout=20, follow_redirects=False) as c:
+        for page in range(1, 101):
+            r = c.post(
+                BILLING + "get-user-resource",
+                headers=headers,
+                json={
+                    "PageNumber": page,
+                    "PageSize": 100,
+                    "ProductCode": "p_tcaca",
+                    "Status": [0, 3],
+                    "PackageEndTimeRangeBegin": now.strftime("%Y-%m-%d %H:%M:%S"),
+                    "PackageEndTimeRangeEnd": "2126-01-01 00:00:00",
+                },
+            )
+            if r.status_code != 200:
+                raise RuntimeError(f"积分服务请求失败（HTTP {r.status_code}）")
+            d = r.json()
+            if not isinstance(d, dict) or d.get("code") != 0:
+                raise RuntimeError(f"积分查询被上游拒绝（code={d.get('code')}），请检查账号或稍后重试")
+            data = (d.get("data") or {}).get("Response", {}).get("Data", {})
+            current = data.get("Accounts")
+            total = int(data.get("TotalCount", 0))
+            if not isinstance(current, list):
+                raise RuntimeError("积分数据格式异常")
+            packages.extend(current)
+            if len(packages) >= total or not current:
+                return summarize_packages(packages)
+    raise RuntimeError("积分包分页不完整")
+
+
 def detect_workbuddy() -> str:
     """自动检测 WorkBuddy.exe：默认路径 → 正在运行的进程。"""
     for p in DEFAULT_WB_PATHS:
@@ -257,6 +301,7 @@ class App:
         f_srv = ttk.Frame(nb); nb.add(f_srv, text=" 服务控制 ")
         f_mdl = ttk.Frame(nb); nb.add(f_mdl, text=" 模型列表 ")
         f_chat = ttk.Frame(nb); nb.add(f_chat, text=" 对话测试 ")
+        f_credit = ttk.Frame(nb); nb.add(f_credit, text=" 额度查询 ")
         f_log = ttk.Frame(nb); nb.add(f_log, text=" 日志 ")
 
         # --- 服务控制 ---
@@ -352,6 +397,17 @@ class App:
         self.txt_reply.grid(row=crow, column=1, columnspan=3, sticky="nsew", padx=4, pady=4)
         f_chat.columnconfigure(1, weight=1)
         f_chat.rowconfigure(crow, weight=1)
+
+        # --- 额度查询 ---
+        qrow = 0
+        ttk.Button(f_credit, text="查询剩余额度", command=self.on_credits).grid(
+            row=qrow, column=0, sticky="w", padx=8, pady=8)
+        self.lbl_credit = ttk.Label(f_credit, text="尚未查询（需先在“服务控制”页启动服务）")
+        self.lbl_credit.grid(row=qrow, column=1, sticky="w")
+        self.txt_credit = tk.Text(f_credit, height=8, wrap="word", state="disabled")
+        self.txt_credit.grid(row=qrow + 1, column=0, columnspan=2, sticky="nsew", padx=8, pady=4)
+        f_credit.columnconfigure(0, weight=1)
+        f_credit.rowconfigure(qrow + 1, weight=1)
 
         # --- 日志 ---
         lrow = 0
@@ -466,6 +522,44 @@ class App:
             finally:
                 self.root.after(0, lambda: self.btn_send.configure(state="normal"))
         threading.Thread(target=work, daemon=True).start()
+
+    def on_credits(self):
+        cred = CONFIG.get("cred")
+        if cred is None:
+            messagebox.showwarning("提示", "请先在“服务控制”页启动服务（启动时加载登录态）")
+            return
+        self.lbl_credit.configure(text="查询中...")
+        self._credit_text("查询中，请稍候...")
+
+        def work():
+            try:
+                headers = cred.get_headers()
+                domain = str(headers.get("X-Domain", "")).lower()
+                if "workbuddy.ai" in domain:
+                    self.root.after(0, self._credit_text, "当前为国际版（workbuddy.ai）账号，仅支持国内账号积分查询")
+                    return
+                info = query_credits(headers)
+                text = (
+                    f"剩余额度：{info['remaining']:g}\n"
+                    f"总额度：  {info['capacity']:g}\n"
+                    f"已使用：  {info['used']:g}\n"
+                    f"积分包数：{info['packages']}\n\n"
+                    f"（查询时间 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}，"
+                    f"数据来自 www.codebuddy.cn 积分服务，仅统计当前周期内未过期的积分包）"
+                )
+                self.root.after(0, self._credit_text, text)
+                self.root.after(0, lambda: self.lbl_credit.configure(
+                    text=f"剩余 {info['remaining']:g} / {info['capacity']:g}"))
+            except Exception as e:
+                self.root.after(0, self._credit_text, f"查询失败：{e}")
+                self.root.after(0, lambda: self.lbl_credit.configure(text="查询失败"))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _credit_text(self, text: str):
+        self.txt_credit.configure(state="normal")
+        self.txt_credit.delete("1.0", "end")
+        self.txt_credit.insert("1.0", text)
+        self.txt_credit.configure(state="disabled")
 
     def _reply(self, text: str):
         self.txt_reply.configure(state="normal")
