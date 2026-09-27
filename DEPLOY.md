@@ -27,7 +27,53 @@ Linux:   ~/.local/share/CodeBuddyExtension/Data/Public/auth/*.info
 
 ---
 
-## 2. 一键部署（Windows PowerShell）
+## 2. 方式一（推荐）：GUI 桌面工具 `CodeBuddy2API-UI.exe`
+
+单文件图形界面，集成全部功能，无需命令行。两种获取方式：
+
+**A. 直接使用已构建的 exe**：拷贝 `dist\CodeBuddy2API-UI.exe` 到目标电脑，双击运行。
+
+**B. 自行构建**（在装好 Python 的电脑上）：
+
+```bat
+git clone https://github.com/lindexyz/codebuddy2api.git
+cd codebuddy2api
+python -m venv .venv
+.venv\Scripts\pip.exe install -r requirements.txt pyinstaller
+build_exe.bat
+:: 产物: dist\CodeBuddy2API-UI.exe
+```
+
+### GUI 功能一览
+
+| 页签 | 功能 |
+|------|------|
+| 服务控制 | WorkBuddy 路径自动检测/浏览、监听地址/端口、API Key、脱敏开关、启动/停止服务、健康状态轮询（含登录态 token 过期提示） |
+| 模型列表 | 一键刷新 `/v1/models`，显示全部可用模型 |
+| 对话测试 | 选择模型 + 输入消息 + temperature，直接发送真实聊天请求并显示回复 |
+| 日志 | 实时查看 `converter.log`（自动跟随） |
+
+配置保存在 exe 同目录的 `gui_config.json`，下次启动自动加载。
+
+### GUI 使用步骤
+
+1. 确保 WorkBuddy / CodeBuddy 桌面端已在本机**登录**
+2. 双击 `CodeBuddy2API-UI.exe`
+3. 在“服务控制”页点 **自动检测** 填入 WorkBuddy 路径 → 点 **启动服务**
+4. 状态变绿后，在“对话测试”页发一条消息验证，或用外部客户端接入
+   （Base URL `http://127.0.0.1:8787/v1`，API Key 留空，除非启动时设置了鉴权）
+
+### 自检模式（无需打开界面即可验证全链路）
+
+```powershell
+.\dist\CodeBuddy2API-UI.exe --selftest
+```
+
+依次验证：启动服务 → /health → /v1/models → 真实对话（期望回复 `GUI_SELFTEST_OK`）→ 停止，全部输出 PASS 即部署成功。
+
+---
+
+## 3. 方式二：命令行部署
 
 ```powershell
 # 1. 克隆本仓库
@@ -46,7 +92,7 @@ python -m venv .venv
 
 ---
 
-## 3. 指定 WorkBuddy 可执行文件（关键步骤）
+## 4. 指定 WorkBuddy 可执行文件（关键步骤）
 
 解密登录态需要通过本机 WorkBuddy 自带的 Electron 二进制读取密钥。程序按以下顺序查找：
 
@@ -74,7 +120,7 @@ $env:WORKBUDDY_ELECTRON_PATH = "G:\AI\WorkBuddy\WorkBuddy.exe"   # 换成你的�
 
 ---
 
-## 4. 启动服务
+## 5. 启动服务
 
 ```powershell
 cd codebuddy2api
@@ -113,7 +159,7 @@ Start-Process -FilePath ".venv\Scripts\python.exe" `
 
 ---
 
-## 5. 验证部署（按顺序执行）
+## 6. 验证部署（按顺序执行）
 
 ```powershell
 # 1. 健康检查（应返回 200 与 credential.token_expired=false）
@@ -145,7 +191,7 @@ print(resp.choices[0].message.content)
 
 ---
 
-## 6. 客户端接入
+## 7. 客户端接入
 
 ### 通用 OpenAI 兼容客户端（Cherry Studio / LobeChat / NextChat / Open WebUI 等）
 
@@ -188,7 +234,7 @@ codex --profile workbuddy "你的任务"
 
 ---
 
-## 7. 故障排查
+## 8. 故障排查
 
 | 现象 | 原因与处理 |
 |------|-----------|
@@ -204,7 +250,7 @@ codex --profile workbuddy "你的任务"
 
 ---
 
-## 8. 安全注意事项
+## 9. 安全注意事项
 
 - 本服务仅绑定 `127.0.0.1`，不要直接暴露公网；对外部署请放 HTTPS 反向代理后并启用 `--api-key`
 - 不要把 `.info` 登录态文件、`converter.log`、`.env` 提交到 Git 或上传到任何第三方
@@ -212,14 +258,13 @@ codex --profile workbuddy "你的任务"
 
 ---
 
-## 9. 新机器快速 checklist
+## 10. 新机器快速 checklist
 
 ```text
 [ ] WorkBuddy 桌面端已安装并登录（auth 目录存在 .info 文件）
-[ ] git clone 本仓库 && python -m venv .venv && pip install -r requirements.txt
-[ ] 设置 WORKBUDDY_ELECTRON_PATH（WorkBuddy 不在默认路径时必须）
-[ ] 启动：.venv\Scripts\python.exe -m core.converter --desensitize --log converter.log
-[ ] curl /health → 200
-[ ] curl /v1/models → 有 deepseek-v4-*
+[ ] 方式一：拷贝 dist\CodeBuddy2API-UI.exe 双击运行（或方式二：命令行部署）
+[ ] GUI 中点“自动检测”填入 WorkBuddy 路径 → 启动服务
+[ ] 状态变绿 / curl /health → 200
+[ ] 对话测试或 curl /v1/models → 有 deepseek-v4-*
 [ ] 发送一次 chat/completions → 有真实回复
 ```

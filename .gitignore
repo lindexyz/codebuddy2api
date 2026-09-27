@@ -35,3 +35,9 @@ wheels/
 management-access.txt
 .idea/
 
+# GUI 工具构建产物
+build/
+dist/
+*.spec
+gui_config.json
+
