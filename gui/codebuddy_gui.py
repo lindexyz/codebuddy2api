@@ -118,7 +118,8 @@ class ServerController:
 
     @property
     def base_url(self) -> str:
-        return f"http://{self.host}:{self.port}"
+        # 对外监听 0.0.0.0 时，本机内部请求用 127.0.0.1（Windows 无法连接 0.0.0.0）
+        return f"http://{client_host(self.host)}:{self.port}"
 
 
 def load_config() -> dict:
@@ -149,7 +150,12 @@ def _port_in_use(host: str, port: int) -> bool:
 
     with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
         s.settimeout(1)
-        return s.connect_ex((host, port)) == 0
+        return s.connect_ex((client_host(host), port)) == 0
+
+
+def client_host(bind_host: str) -> str:
+    """返回本机可连接的主机地址：0.0.0.0/:: 在 Windows 上不可作为连接目标。"""
+    return "127.0.0.1" if bind_host in ("0.0.0.0", "::") else bind_host
 
 
 def detect_workbuddy() -> str:
@@ -495,8 +501,11 @@ class App:
                     if code == 200:
                         cred = json.loads(body).get("credential", {})
                         expired = cred.get("token_expired")
+                        hint = ""
+                        if self.ctrl.host in ("0.0.0.0", "::"):
+                            hint = " ｜ 局域网客户端请用本机IP访问（如 http://192.168.x.x:%d）" % self.ctrl.port
                         self.root.after(0, self._set_status,
-                                        f"运行中 {self.ctrl.base_url} ｜ 登录态有效: {not expired}", True)
+                                        f"运行中 {self.ctrl.base_url} ｜ 登录态有效: {not expired}{hint}", True)
                     else:
                         self.root.after(0, self._set_status, f"运行中（health={code}）", True)
                 except Exception:
