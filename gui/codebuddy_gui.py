@@ -27,6 +27,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import httpx
+import socket
 import uvicorn
 
 # ---------------------------------------------------------------------------
@@ -79,6 +80,11 @@ class ServerController:
               no_compact: bool, log_enabled: bool, workbuddy_path: str) -> str:
         if self.running:
             return f"服务已在运行：http://{self.host}:{self.port}"
+        if _port_in_use(host, port):
+            raise RuntimeError(
+                f"端口 {host}:{port} 已被占用（可能已有 codebuddy2api 或其他服务在运行）。\n"
+                "请在下方修改端口后重试，或先停止占用该端口的进程。"
+            )
         if workbuddy_path:
             os.environ["WORKBUDDY_ELECTRON_PATH"] = workbuddy_path
         af = find_auth_file()
@@ -90,7 +96,12 @@ class ServerController:
         CONFIG["log_path"] = str(_ROOT / "converter.log") if log_enabled else None
         CONFIG["cred"] = CredentialManager(af)
         self.host, self.port = host, port
-        config = uvicorn.Config(fastapi_app, host=host, port=port, log_level="warning")
+        # log_config=None：跳过 uvicorn 的 dictConfig（其 'default' formatter 在
+        # 打包/同进程二次配置场景下会抛 "Unable to configure formatter 'default'"）。
+        # 服务请求日志由 converter.log 独立记录，不受影响。
+        config = uvicorn.Config(
+            fastapi_app, host=host, port=port, log_level="warning", log_config=None
+        )
         self.server = uvicorn.Server(config)
         self.thread = threading.Thread(target=self.server.run, daemon=True)
         self.thread.start()
@@ -130,6 +141,15 @@ def load_config() -> dict:
 
 def save_config(cfg: dict) -> None:
     CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _port_in_use(host: str, port: int) -> bool:
+    """检测端口是否已被占用。"""
+    import contextlib
+
+    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
+        s.settimeout(1)
+        return s.connect_ex((host, port)) == 0
 
 
 def detect_workbuddy() -> str:
